@@ -83,16 +83,22 @@ def generate_sql(user_query: str, conversation_history: list[dict] = None, table
     init_gemini()
 
     # Find an available model since different API keys have different access
-    model_name = "gemini-1.5-flash"
+    model_name = "gemini-2.5-flash"
     try:
         available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        preferred_models = ["models/gemini-1.5-flash", "models/gemini-1.5-pro", "models/gemini-pro"]
+        preferred_models = [
+            "models/gemini-2.5-flash",
+            "models/gemini-2.0-flash",
+            "models/gemini-2.0-flash-lite",
+            "models/gemini-1.5-flash",
+            "models/gemini-1.5-pro",
+        ]
         for pref in preferred_models:
             if pref in available_models:
                 model_name = pref.split("/")[-1]
                 break
     except Exception:
-        pass # fallback to default if list_models fails
+        pass  # fallback to default if list_models fails
 
     model = genai.GenerativeModel(model_name)
 

@@ -117,9 +117,9 @@ def execute_query(sql: str) -> dict:
     Execute a read-only SQL query and return results as a dict.
     Returns: {"columns": [...], "rows": [[...], ...], "row_count": int}
     """
-    # Safety: only allow SELECT statements
+    # Safety: only allow SELECT statements (including CTEs that start with WITH)
     sql_upper = sql.strip().upper()
-    if not sql_upper.startswith("SELECT"):
+    if not sql_upper.startswith("SELECT") and not sql_upper.startswith("WITH"):
         raise ValueError("Only SELECT queries are allowed for safety.")
 
     dangerous_keywords = ["DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "CREATE", "ATTACH"]

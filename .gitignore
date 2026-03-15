@@ -1,0 +1,24 @@
+# Environment variables - NEVER commit these
+.env
+.env.local
+.env.production
+.env.development
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Database
+data/sales.db
+
+# Node
+frontend/node_modules/
+frontend/dist/
