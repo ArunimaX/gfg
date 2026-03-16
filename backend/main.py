@@ -27,7 +27,6 @@ from .database import (
     execute_query,
 )
 from .llm_engine import generate_sql, generate_sql_with_groq, build_dynamic_system_prompt
-from .chart_selector import select_chart_type
 from .auth import verify_token
 
 app = FastAPI()
@@ -35,44 +34,64 @@ app = FastAPI()
 # Configure CORS for frontend access
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Initialize the database on startup
 @app.on_event("startup")
 def startup_event():
     init_db()
-    # Triggered reload to load .env 
+    # Triggered reload to load .env
 
 _schema_cache = {}
 
-# Request Models
+# ─── Request / Response Models ───────────────────────────────────────────────
+
 class QueryRequest(BaseModel):
     query: str
-    conversation_history: List[Dict[str, str]] = []
+    conversation_history: List[Dict[str, Any]] = []
     table_name: str = "amazon_sales"
     session_id: Optional[str] = None
 
+
+class ChartSpec(BaseModel):
+    sql: Optional[str] = None
+    chart_type: Optional[str] = None
+    title: Optional[str] = None
+    x_axis: Optional[str] = None
+    y_axis: Optional[str] = None
+    group_by: Optional[str] = None
+    insight: Optional[str] = None
+    data: Optional[List[Dict[str, Any]]] = None
+    columns: Optional[List[str]] = None
+    error: Optional[str] = None
+
+
 class QueryResponse(BaseModel):
     success: bool
-    sql: Optional[str] = None
     explanation: Optional[str] = None
-    columns: Optional[List[str]] = None
-    rows: Optional[List[list]] = None
-    row_count: Optional[int] = None
-    charts: Optional[List[Dict[str, Any]]] = None
+    can_answer: Optional[bool] = None
+    charts: Optional[List[ChartSpec]] = None
     error: Optional[str] = None
     suggestions: List[str] = []
     session_id: Optional[str] = None
+    # Legacy single-chart fields (kept for backward compat with old frontend)
+    sql: Optional[str] = None
+    columns: Optional[List[str]] = None
+    rows: Optional[List[list]] = None
+    row_count: Optional[int] = None
+
 
 class FollowUpRequest(BaseModel):
     query: str
-    columns: List[str]
+    columns: List[str] = []
+    sql: Optional[str] = None
     explanation: Optional[str] = None
-    conversation_history: List[Dict[str, str]] = []
+    conversation_history: List[Dict[str, Any]] = []
+
 
 class InsightsRequest(BaseModel):
     query: str
@@ -80,6 +99,8 @@ class InsightsRequest(BaseModel):
     rows: List[list]
     explanation: Optional[str] = None
 
+
+# ─── Health / Schema / Tables ─────────────────────────────────────────────────
 
 @app.get("/api/health")
 async def health():
@@ -118,6 +139,8 @@ async def list_tables(user_id: str = Depends(verify_token)):
         return {"success": False, "error": str(e)}
 
 
+# ─── Chat Sessions ─────────────────────────────────────────────────────────────
+
 @app.get("/api/sessions")
 async def get_sessions(user_id: str = Depends(verify_token)):
     """List all past chat sessions for the authenticated user."""
@@ -138,29 +161,29 @@ async def get_session_history(session_id: str, user_id: str = Depends(verify_tok
         return {"success": False, "error": str(e)}
 
 
+# ─── Main Query Endpoint ───────────────────────────────────────────────────────
+
 @app.post("/api/query", response_model=QueryResponse)
 async def query(request: QueryRequest, user_id: str = Depends(verify_token)):
     """
     Process a natural language query:
-    1. Send to Gemini LLM to generate SQL
-    2. Execute SQL on SQLite
-    3. Select appropriate chart types
-    4. Return structured results with smart error recovery
+    1. Send to LLM to generate multi-chart SQL specs
+    2. Execute each chart's SQL independently against SQLite
+    3. Return structured results with chart data arrays
     """
     try:
+        # ── Session handling ──────────────────────────────────────────────────
         session_id = request.session_id
         if not session_id:
             title = request.query[:50] + "..." if len(request.query) > 50 else request.query
             session_id = create_chat_session(user_id, title, request.table_name)
-            request.session_id = session_id
 
-        # Determine if we need a custom system prompt for non-default tables
+        # ── Custom system prompt for non-default tables ────────────────────────
         custom_system_prompt = None
         if request.table_name != "amazon_sales":
             if request.table_name in _schema_cache:
                 custom_system_prompt = _schema_cache[request.table_name]
             else:
-                # Try to build one dynamically
                 try:
                     info = get_dynamic_table_info(request.table_name)
                     custom_system_prompt = build_dynamic_system_prompt(info["schema_prompt"])
@@ -168,7 +191,7 @@ async def query(request: QueryRequest, user_id: str = Depends(verify_token)):
                 except Exception:
                     pass
 
-        # Step 1: Generate SQL from natural language
+        # ── Step 1: LLM generates multi-chart spec ─────────────────────────────
         llm_result = generate_sql(
             user_query=request.query,
             conversation_history=request.conversation_history,
@@ -176,15 +199,14 @@ async def query(request: QueryRequest, user_id: str = Depends(verify_token)):
             custom_system_prompt=custom_system_prompt,
         )
 
+        # ── Pre-flight: check if the question is answerable ────────────────────
         if not llm_result.get("can_answer", False):
             explanation_text = llm_result.get("explanation", "")
             error_msg = "Sorry, the available dataset does not contain information to answer this question."
 
-            # Surface actual API errors to the user instead of masking them
             if "Error" in explanation_text or "Failed" in explanation_text:
                 error_msg = explanation_text
 
-            # Smart error recovery: suggest what the dataset CAN answer
             suggestions = []
             try:
                 caps = get_dataset_capabilities(request.table_name)
@@ -194,14 +216,17 @@ async def query(request: QueryRequest, user_id: str = Depends(verify_token)):
 
             return QueryResponse(
                 success=False,
+                can_answer=False,
                 explanation=explanation_text,
                 error=error_msg,
                 suggestions=suggestions,
+                charts=[],
+                session_id=session_id,
             )
 
-        sql = llm_result["sql"]
-        if not sql:
-            # Smart error recovery here too
+        # ── Step 2: Execute each chart's SQL independently ─────────────────────
+        chart_specs = llm_result.get("charts", [])
+        if not chart_specs:
             suggestions = []
             try:
                 caps = get_dataset_capabilities(request.table_name)
@@ -210,52 +235,105 @@ async def query(request: QueryRequest, user_id: str = Depends(verify_token)):
                 pass
             return QueryResponse(
                 success=False,
-                error="The AI could not generate a valid SQL query for your question.",
+                error="The AI could not generate SQL queries for your question. Try rephrasing.",
                 suggestions=suggestions,
+                session_id=session_id,
             )
 
-        # Step 2: Execute SQL
-        try:
-            result = execute_query(sql)
-        except Exception as e:
-            error_msg = str(e)
-            return QueryResponse(
-                success=False,
-                sql=sql,
-                explanation=llm_result.get("explanation", ""),
-                error=f"SQL execution error: {error_msg}. Please try rephrasing your question.",
-            )
+        executed_charts: List[ChartSpec] = []
+        all_sqls = []
 
-        # Step 3: Select chart types
-        charts = select_chart_type(
-            sql=sql,
-            columns=result["columns"],
-            rows=result["rows"],
-            user_query=request.query,
-        )
+        for chart_spec in chart_specs:
+            sql = chart_spec.get("sql", "").strip()
+            chart_type = chart_spec.get("chart_type", "bar")
+            title = chart_spec.get("title", "Chart")
+            x_axis = chart_spec.get("x_axis", "")
+            y_axis = chart_spec.get("y_axis", "")
+            group_by = chart_spec.get("group_by", None)
+            insight = chart_spec.get("insight", "")
 
+            if not sql:
+                executed_charts.append(ChartSpec(
+                    sql=sql,
+                    chart_type=chart_type,
+                    title=title,
+                    x_axis=x_axis,
+                    y_axis=y_axis,
+                    group_by=group_by,
+                    insight=insight,
+                    data=[],
+                    columns=[],
+                    error="No SQL was generated for this chart.",
+                ))
+                continue
+
+            # Try to execute this chart's SQL
+            try:
+                result = execute_query(sql)
+                cols = result["columns"]
+                rows = result["rows"]
+
+                # Convert rows to list-of-dicts for the frontend
+                data_dicts = [
+                    {cols[i]: row[i] for i in range(len(cols))}
+                    for row in rows
+                ]
+
+                # Auto-detect x/y axes if LLM left them blank
+                if not x_axis and len(cols) >= 1:
+                    x_axis = cols[0]
+                if not y_axis and len(cols) >= 2:
+                    y_axis = cols[1]
+
+                all_sqls.append(sql)
+                executed_charts.append(ChartSpec(
+                    sql=sql,
+                    chart_type=chart_type,
+                    title=title,
+                    x_axis=x_axis,
+                    y_axis=y_axis,
+                    group_by=group_by,
+                    insight=insight,
+                    data=data_dicts,
+                    columns=cols,
+                ))
+
+            except Exception as e:
+                executed_charts.append(ChartSpec(
+                    sql=sql,
+                    chart_type=chart_type,
+                    title=title,
+                    x_axis=x_axis,
+                    y_axis=y_axis,
+                    group_by=group_by,
+                    insight=insight,
+                    data=[],
+                    columns=[],
+                    error=f"SQL failed: {str(e)}",
+                ))
+
+        # ── Step 3: Persist to chat history ────────────────────────────────────
+        combined_sql = "; ".join(all_sqls) if all_sqls else ""
         add_chat_message(
             session_id=session_id,
             role="user",
-            content=request.query
+            content=request.query,
         )
         add_chat_message(
             session_id=session_id,
             role="assistant",
             content=llm_result.get("explanation", "Here is your data."),
-            sql_query=sql,
-            result_summary=f"Found {result['row_count']} rows."
+            sql_query=combined_sql,
+            result_summary=f"Generated {len(executed_charts)} chart(s).",
         )
 
         return QueryResponse(
             success=True,
-            sql=sql,
+            can_answer=True,
             explanation=llm_result.get("explanation", ""),
-            columns=result["columns"],
-            rows=result["rows"],
-            row_count=result["row_count"],
-            charts=charts,
+            charts=executed_charts,
             session_id=session_id,
+            sql=combined_sql,
         )
 
     except Exception as e:
@@ -266,6 +344,8 @@ async def query(request: QueryRequest, user_id: str = Depends(verify_token)):
         )
 
 
+# ─── CSV Upload ────────────────────────────────────────────────────────────────
+
 @app.post("/api/upload-csv")
 async def upload_csv(file: UploadFile = File(...), user_id: str = Depends(verify_token)):
     """Upload a CSV file and make it queryable with auto-detected schema."""
@@ -273,13 +353,11 @@ async def upload_csv(file: UploadFile = File(...), user_id: str = Depends(verify
         content = await file.read()
         csv_text = content.decode("utf-8", errors="replace")
 
-        # Use filename (without extension) as table name
         table_name = file.filename.rsplit(".", 1)[0] if file.filename else "uploaded_data"
         table_name = table_name.replace(" ", "_").replace("-", "_").lower()
 
         result = load_uploaded_csv(csv_text, table_name)
 
-        # Cache the dynamic system prompt for this table
         schema_prompt = result.get("schema_prompt", "")
         if schema_prompt:
             _schema_cache[table_name] = build_dynamic_system_prompt(schema_prompt)
@@ -296,22 +374,26 @@ async def upload_csv(file: UploadFile = File(...), user_id: str = Depends(verify
         return {"success": False, "error": str(e)}
 
 
+# ─── Example Prompts ───────────────────────────────────────────────────────────
+
 @app.get("/api/example-prompts")
 async def example_prompts(user_id: str = Depends(verify_token)):
     """Return example prompts for the user."""
     return {
         "prompts": [
-            "Show total sales by region",
+            "Show total sales by region and also the monthly revenue trend",
+            "What is the total revenue? Highlight top category",
+            "Compare revenue by payment method across all regions",
+            "Show monthly sales trend for 2023 and breakdown by product category",
             "Which product category generated the highest revenue?",
-            "Show monthly sales trend for 2023",
-            "What is the average discount percentage by product category?",
-            "Show the top 5 products by revenue",
-            "Compare payment methods by total revenue",
-            "Show quarterly revenue breakdown for 2022",
-            "What is the average rating by product category?",
+            "Show the impact of discount on revenue for each category",
+            "Compare average rating and review count by product category",
+            "Quarterly revenue breakdown — line chart trend and pie breakdown",
         ]
     }
 
+
+# ─── Follow-ups ────────────────────────────────────────────────────────────────
 
 @app.post("/api/follow-ups")
 async def generate_follow_ups(request: FollowUpRequest, user_id: str = Depends(verify_token)):
@@ -359,14 +441,15 @@ Return ONLY a JSON array of 3 strings, no markdown, no extra text. Example:
         return {"success": True, "suggestions": suggestions}
 
     except Exception as e:
-        # Fallback: return generic suggestions related to the query
         fallback = [
             f"Break down '{request.query}' by product category",
-            f"Compare this result across different customer regions",
-            f"Show the trend over time for this analysis",
+            "Compare this result across different customer regions",
+            "Show the trend over time for this analysis",
         ]
         return {"success": True, "suggestions": fallback}
 
+
+# ─── AI Insights ───────────────────────────────────────────────────────────────
 
 @app.post("/api/insights")
 async def generate_insights(request: InsightsRequest, user_id: str = Depends(verify_token)):
@@ -374,7 +457,6 @@ async def generate_insights(request: InsightsRequest, user_id: str = Depends(ver
     try:
         import google.generativeai as genai
 
-        # Build a data summary from rows (limit to first 30 rows for the LLM)
         sample_rows = request.rows[:30] if request.rows else []
         data_summary = ""
         if request.columns and sample_rows:

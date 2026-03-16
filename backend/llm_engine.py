@@ -1,4 +1,4 @@
-"""LLM Engine: Uses Google Gemini with Groq as fallback to convert natural language to SQL."""
+"""LLM Engine: Uses Google Gemini with Groq as fallback to convert natural language to multi-chart SQL."""
 
 import os
 import re
@@ -10,7 +10,7 @@ from groq import Groq
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 
-SYSTEM_PROMPT = """You are an expert SQL analyst. You convert natural language business questions into SQLite SQL queries.
+SYSTEM_PROMPT = """You are an expert data analyst and SQL engineer. Your job is to convert a natural language business question into one or more SQL queries, each with an appropriate visualization.
 
 You have access to a single table called `amazon_sales` with the following schema:
 
@@ -30,59 +30,146 @@ COLUMNS:
   - discounted_price (REAL) — Price per unit after discount
   - total_revenue (REAL) — Final transaction value = discounted_price × quantity_sold
 
-RULES:
+=== CHART TYPE SELECTION RULES ===
+- time-based x_axis (month, quarter, date, year) → "line" or "area"
+- comparing discrete categories → "bar"
+- parts-of-whole with 6 or fewer categories → "pie"
+- NEVER use "pie" if categories > 6
+- two numeric axes → "scatter"
+
+=== QUERY DECOMPOSITION RULES ===
+- Simple one metric + one dimension → 1 chart
+- "and also" / "as well as" / "along with" → 2+ independent charts
+- "impact of X on Y" → scatter + bar (2 charts)
+- "trend + breakdown" → line + bar (2 charts)
+- "compare X by Y across Z" → grouped bar with `group_by` set; return ALL rows, never filter down
+
+=== HIGHLIGHT RULE ===
+- If the user says "highlight top" or "flag best", add a boolean column using a window function:
+  CASE WHEN total_revenue = MAX(total_revenue) OVER (PARTITION BY customer_region) THEN 1 ELSE 0 END AS is_top
+  NEVER filter rows when highlighting. Show everything, just mark the top.
+
+=== STRICT SQL RULES ===
 1. ONLY use columns that exist in the schema above. NEVER invent columns.
 2. Always use the table name `amazon_sales`.
 3. For date operations, use SQLite date functions like strftime().
-4. For monthly aggregation, use strftime('%Y-%m', order_date) as month.
-5. For quarterly aggregation, use:
-   CASE 
-     WHEN CAST(strftime('%m', order_date) AS INTEGER) BETWEEN 1 AND 3 THEN 'Q1'
-     WHEN CAST(strftime('%m', order_date) AS INTEGER) BETWEEN 4 AND 6 THEN 'Q2'
-     WHEN CAST(strftime('%m', order_date) AS INTEGER) BETWEEN 7 AND 9 THEN 'Q3'
-     WHEN CAST(strftime('%m', order_date) AS INTEGER) BETWEEN 10 AND 12 THEN 'Q4'
+4. For monthly aggregation: strftime('%Y-%m', order_date) as month
+5. For quarterly aggregation:
+   CASE WHEN CAST(strftime('%m', order_date) AS INTEGER) BETWEEN 1 AND 3 THEN 'Q1'
+        WHEN CAST(strftime('%m', order_date) AS INTEGER) BETWEEN 4 AND 6 THEN 'Q2'
+        WHEN CAST(strftime('%m', order_date) AS INTEGER) BETWEEN 7 AND 9 THEN 'Q3'
+        WHEN CAST(strftime('%m', order_date) AS INTEGER) BETWEEN 10 AND 12 THEN 'Q4'
    END as quarter
-6. For "revenue" or "sales", use SUM(total_revenue).
-7. For "top" or "highest", use ORDER BY ... DESC LIMIT.
-8. When the user says "region", use customer_region.
-9. When the user says "category", use product_category.
-10. Return ONLY a JSON object with these keys:
-    - "sql": the SQL query string
-    - "explanation": a brief explanation of what the query does
-    - "can_answer": true/false (false if the question cannot be answered from this dataset)
-11. If the question cannot be answered from the available data, set "can_answer" to false and explain why.
-12. Always alias aggregated columns with readable names (e.g., total_sales, avg_price).
-13. Use ROUND() for floating point results.
+6. For "revenue" or "sales", always use SUM(total_revenue).
+7. Always alias aggregated columns with readable names (e.g., total_sales, avg_price).
+8. Use ROUND() for all floating point results.
 
-Respond ONLY with valid JSON. No markdown, no code blocks, just raw JSON.
+=== OUTPUT FORMAT ===
+Respond ONLY with a valid JSON object. No markdown, no code blocks, no explanation. Just raw JSON:
+
+{
+  "can_answer": true,
+  "explanation": "A clear overall explanation of what you're showing (1-2 sentences).",
+  "charts": [
+    {
+      "sql": "SELECT ...",
+      "chart_type": "line | bar | pie | scatter | area",
+      "title": "Descriptive Chart Title",
+      "x_axis": "column_name",
+      "y_axis": "column_name",
+      "group_by": "column_name or null",
+      "insight": "One sentence key takeaway from this chart."
+    }
+  ]
+}
+
+If the question CANNOT be answered from the available data, return:
+{
+  "can_answer": false,
+  "explanation": "Reason why this cannot be answered.",
+  "charts": []
+}
 """
 
 
 def build_dynamic_system_prompt(schema_prompt: str) -> str:
-    """Build a complete system prompt from a dynamic schema description."""
-    return f"""You are an expert SQL analyst. You convert natural language business questions into SQLite SQL queries.
+    """Build a complete multi-chart system prompt from a dynamic schema description."""
+    return f"""You are an expert data analyst and SQL engineer. Convert the user's natural language question into one or more SQL queries with appropriate visualizations.
 
 You have access to the following table:
 
 {schema_prompt}
 
-RULES:
-1. ONLY use columns that exist in the schema above. NEVER invent columns.
-2. For date operations, use SQLite date functions like strftime().
-3. For monthly aggregation, use strftime('%Y-%m', date_column) as month.
-4. For quarterly aggregation, use CASE with strftime('%m', date_column).
-5. For "revenue" or "sales", use SUM on the relevant numeric column.
-6. For "top" or "highest", use ORDER BY ... DESC LIMIT.
-7. Return ONLY a JSON object with these keys:
-    - "sql": the SQL query string
-    - "explanation": a brief explanation of what the query does
-    - "can_answer": true/false (false if the question cannot be answered from this dataset)
-8. If the question cannot be answered from the available data, set "can_answer" to false and explain why.
-9. Always alias aggregated columns with readable names.
-10. Use ROUND() for floating point results.
+=== CHART TYPE SELECTION RULES ===
+- time-based x_axis → "line" or "area"
+- comparing discrete categories → "bar"
+- parts-of-whole, ≤6 categories → "pie"
+- NEVER "pie" if categories > 6
+- two numeric axes → "scatter"
 
-Respond ONLY with valid JSON. No markdown, no code blocks, just raw JSON.
+=== QUERY DECOMPOSITION RULES ===
+- Simple: 1 chart. "and also" / "as well as" / "trend + breakdown" → 2+ independent charts.
+- "compare X by Y across Z" → grouped bar, group_by set.
+
+=== STRICT RULES ===
+1. ONLY use columns in the schema above.
+2. Always alias aggregated columns with readable names.
+3. Use ROUND() for floats. Use SQLite strftime() for dates.
+4. If cannot answer: set can_answer = false, charts = [].
+
+=== OUTPUT FORMAT (raw JSON only, no markdown) ===
+{{
+  "can_answer": true,
+  "explanation": "...",
+  "charts": [
+    {{
+      "sql": "SELECT ...",
+      "chart_type": "line | bar | pie | scatter | area",
+      "title": "Chart Title",
+      "x_axis": "column_name",
+      "y_axis": "column_name",
+      "group_by": null,
+      "insight": "One sentence key takeaway."
+    }}
+  ]
+}}
 """
+
+
+def _wrap_legacy_result(result: dict) -> dict:
+    """Backward compatibility: wrap old single-sql format into new multi-chart format."""
+    if "sql" in result and "charts" not in result:
+        result["charts"] = [
+            {
+                "sql": result.get("sql", ""),
+                "chart_type": "bar",
+                "title": "Query Result",
+                "x_axis": "",
+                "y_axis": "",
+                "group_by": None,
+                "insight": result.get("explanation", ""),
+            }
+        ]
+    return result
+
+
+def _parse_llm_response(response_text: str) -> dict:
+    """Robustly parse LLM JSON response, stripping markdown if present."""
+    response_text = re.sub(r"```json\s*", "", response_text)
+    response_text = re.sub(r"```\s*", "", response_text)
+    response_text = response_text.strip()
+    return json.loads(response_text)
+
+
+def _validate_result(result: dict) -> dict:
+    """Ensure the result has the required top-level keys."""
+    if "can_answer" not in result:
+        result["can_answer"] = bool(result.get("charts") or result.get("sql"))
+    if "charts" not in result:
+        result = _wrap_legacy_result(result)
+    if "explanation" not in result:
+        result["explanation"] = ""
+    return result
 
 
 def init_gemini():
@@ -96,30 +183,20 @@ def init_gemini():
     genai.configure(api_key=api_key)
 
 
-def generate_sql_with_groq(user_query: str, conversation_history: list[dict] = None, table_name: str = "amazon_sales", custom_schema: str = None, custom_system_prompt: str = None) -> dict:
+def generate_sql_with_groq(user_query: str, conversation_history: list = None, table_name: str = "amazon_sales", custom_schema: str = None, custom_system_prompt: str | None = None) -> dict:
     """
-    Fallback: Use Groq API to generate SQL when Gemini fails.
-    
-    Args:
-        user_query: The user's natural language question
-        conversation_history: List of previous {query, sql} dicts for follow-ups
-        table_name: Target table name
-        custom_schema: Optional custom schema for uploaded CSVs
-    
-    Returns:
-        dict with keys: sql, explanation, can_answer
+    Fallback: Use Groq API to generate multi-chart SQL when Gemini fails.
     """
     groq_api_key = os.environ.get("GROQ_API_KEY", "")
     if not groq_api_key:
         raise ValueError("GROQ_API_KEY not available for fallback")
-    
+
     client = Groq(api_key=groq_api_key)
-    
-    # Build the prompt
+
     system = custom_system_prompt if custom_system_prompt else SYSTEM_PROMPT
     if custom_schema and not custom_system_prompt:
         system += f"\n\nADDITIONAL TABLE:\n{custom_schema}\nUse table name: {table_name}"
-    
+
     # Add conversation history
     history_context = ""
     if conversation_history:
@@ -127,89 +204,62 @@ def generate_sql_with_groq(user_query: str, conversation_history: list[dict] = N
         for entry in conversation_history[-5:]:
             history_context += f"User asked: {entry.get('query', '')}\n"
             history_context += f"SQL generated: {entry.get('sql', '')}\n\n"
-        history_context += "The user may be asking a follow-up question that builds on the previous queries. "
-        history_context += "If they say things like 'now filter', 'only show', 'change to', etc., modify the previous query accordingly.\n"
-    
-    full_prompt = system + history_context + f"\n\nUser question: {user_query}"
-    
+        history_context += "The user may be asking a follow-up question that builds on the previous queries.\n"
+
     try:
-        # Use Groq's llama model
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
                 {"role": "system", "content": system + history_context},
-                {"role": "user", "content": user_query}
+                {"role": "user", "content": user_query},
             ],
             temperature=0.1,
-            max_tokens=1024,
+            max_tokens=2048,
         )
-        
+
         response_text = response.choices[0].message.content.strip()
-        
-        # Clean up response - remove markdown code blocks if present
-        response_text = re.sub(r"```json\s*", "", response_text)
-        response_text = re.sub(r"```\s*", "", response_text)
-        response_text = response_text.strip()
-        
-        result = json.loads(response_text)
-        
-        # Validate required keys
-        if "sql" not in result:
-            result["sql"] = ""
-        if "explanation" not in result:
-            result["explanation"] = "Query generated successfully (via Groq fallback)."
-        if "can_answer" not in result:
-            result["can_answer"] = bool(result["sql"])
-        
-        # Replace table name if custom
-        if table_name != "amazon_sales" and "amazon_sales" in result.get("sql", ""):
-            result["sql"] = result["sql"].replace("amazon_sales", table_name)
-        
+        result = _parse_llm_response(response_text)
+        result = _validate_result(result)
+
+        # Fix table name in all chart SQLs
+        if table_name != "amazon_sales":
+            for chart in result.get("charts", []):
+                sql = chart.get("sql", "")
+                if "amazon_sales" in sql:
+                    chart["sql"] = sql.replace("amazon_sales", table_name)
+
         return result
-        
-    except json.JSONDecodeError as e:
-        # Try to extract SQL from non-JSON response
-        sql_match = re.search(r"(SELECT\s+.+?)(?:\n\n|$)", response_text, re.IGNORECASE | re.DOTALL)
-        if sql_match:
-            return {
-                "sql": sql_match.group(1).strip(),
-                "explanation": "Query extracted from Groq response.",
-                "can_answer": True,
-            }
+
+    except json.JSONDecodeError:
         return {
-            "sql": "",
-            "explanation": f"Failed to parse Groq response: {str(e)}",
             "can_answer": False,
+            "explanation": "Failed to parse Groq response as JSON.",
+            "charts": [],
         }
     except Exception as e:
         return {
-            "sql": "",
-            "explanation": f"Error communicating with Groq API: {str(e)}",
             "can_answer": False,
+            "explanation": f"Error communicating with Groq API: {str(e)}",
+            "charts": [],
         }
 
 
-def generate_sql(user_query: str, conversation_history: list[dict] = None, table_name: str = "amazon_sales", custom_schema: str = None, custom_system_prompt: str = None) -> dict:
+def generate_sql(user_query: str, conversation_history: list = None, table_name: str = "amazon_sales", custom_schema: str = None, custom_system_prompt: str | None = None) -> dict:
     """
-    Convert a natural language query to SQL using Gemini with Groq fallback.
-    
-    Args:
-        user_query: The user's natural language question
-        conversation_history: List of previous {query, sql} dicts for follow-ups
-        table_name: Target table name
-        custom_schema: Optional custom schema for uploaded CSVs
-    
+    Convert a natural language query to multi-chart SQL specs using Gemini with Groq fallback.
+
     Returns:
-        dict with keys: sql, explanation, can_answer
+        dict with keys: can_answer, explanation, charts (list of chart specs)
     """
+
     # Try Gemini first
     try:
         init_gemini()
 
-        # Find an available model since different API keys have different access
-        model_name = "gemini-2.5-flash"
+        # Find an available model
+        model_name = "gemini-2.0-flash"
         try:
-            available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+            available_models = [m.name for m in genai.list_models() if "generateContent" in m.supported_generation_methods]
             preferred_models = [
                 "models/gemini-2.5-flash",
                 "models/gemini-2.0-flash",
@@ -226,10 +276,7 @@ def generate_sql(user_query: str, conversation_history: list[dict] = None, table
 
         model = genai.GenerativeModel(model_name)
 
-        # Build the prompt
-        messages = []
-
-        # System context: use dynamic prompt if provided
+        # Build the system context
         system = custom_system_prompt if custom_system_prompt else SYSTEM_PROMPT
         if custom_schema and not custom_system_prompt:
             system += f"\n\nADDITIONAL TABLE:\n{custom_schema}\nUse table name: {table_name}"
@@ -238,52 +285,42 @@ def generate_sql(user_query: str, conversation_history: list[dict] = None, table
         history_context = ""
         if conversation_history:
             history_context = "\n\nPREVIOUS CONVERSATION:\n"
-            for entry in conversation_history[-5:]:  # Last 5 exchanges
+            for entry in conversation_history[-5:]:
                 history_context += f"User asked: {entry.get('query', '')}\n"
                 history_context += f"SQL generated: {entry.get('sql', '')}\n\n"
-            history_context += "The user may be asking a follow-up question that builds on the previous queries. "
-            history_context += "If they say things like 'now filter', 'only show', 'change to', etc., modify the previous query accordingly.\n"
+            history_context += (
+                "The user may be asking a follow-up question that builds on the previous queries. "
+                "If they say things like 'now filter', 'only show', 'change to', etc., modify the previous query accordingly.\n"
+            )
 
         full_prompt = system + history_context + f"\n\nUser question: {user_query}"
-
         response = model.generate_content(full_prompt)
         response_text = response.text.strip()
 
-        # Clean up response - remove markdown code blocks if present
-        response_text = re.sub(r"```json\s*", "", response_text)
-        response_text = re.sub(r"```\s*", "", response_text)
-        response_text = response_text.strip()
+        result = _parse_llm_response(response_text)
+        result = _validate_result(result)
 
-        result = json.loads(response_text)
-
-        # Validate required keys
-        if "sql" not in result:
-            result["sql"] = ""
-        if "explanation" not in result:
-            result["explanation"] = "Query generated successfully."
-        if "can_answer" not in result:
-            result["can_answer"] = bool(result["sql"])
-
-        # Replace table name if custom
-        if table_name != "amazon_sales" and "amazon_sales" in result.get("sql", ""):
-            result["sql"] = result["sql"].replace("amazon_sales", table_name)
+        # Fix table name in all chart SQLs
+        if table_name != "amazon_sales":
+            for chart in result.get("charts", []):
+                sql = chart.get("sql", "")
+                if "amazon_sales" in sql:
+                    chart["sql"] = sql.replace("amazon_sales", table_name)
 
         return result
 
     except Exception as gemini_error:
-        # Gemini failed, try Groq as fallback
         print(f"⚠️ Gemini API failed: {str(gemini_error)}")
         print("🔄 Attempting fallback to Groq API...")
-        
+
         try:
             result = generate_sql_with_groq(user_query, conversation_history, table_name, custom_schema, custom_system_prompt)
             print("✅ Successfully generated SQL using Groq fallback")
             return result
         except Exception as groq_error:
             print(f"❌ Groq fallback also failed: {str(groq_error)}")
-            # Both failed, return error
             return {
-                "sql": "",
-                "explanation": f"Both Gemini and Groq APIs failed. Gemini: {str(gemini_error)}. Groq: {str(groq_error)}",
                 "can_answer": False,
+                "explanation": f"Both Gemini and Groq APIs failed. Gemini: {str(gemini_error)}. Groq: {str(groq_error)}",
+                "charts": [],
             }

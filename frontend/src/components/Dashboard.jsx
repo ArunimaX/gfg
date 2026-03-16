@@ -20,7 +20,7 @@ function FollowUpSuggestions({ result, conversationHistory, onFollowUp }) {
                 const token = await getToken();
                 const res = await fetch(`${API_URL}/api/follow-ups`, {
                     method: 'POST',
-                    headers: { 
+                    headers: {
                         'Content-Type': 'application/json',
                         'Authorization': `Bearer ${token}`
                     },
@@ -28,7 +28,7 @@ function FollowUpSuggestions({ result, conversationHistory, onFollowUp }) {
                         query: result.query,
                         sql: result.sql || '',
                         explanation: result.explanation || '',
-                        columns: result.columns || [],
+                        columns: result.charts?.[0]?.columns || [],
                         conversation_history: conversationHistory || [],
                     }),
                 });
@@ -37,7 +37,7 @@ function FollowUpSuggestions({ result, conversationHistory, onFollowUp }) {
                     setSuggestions(data.suggestions);
                 }
             } catch {
-                // Silently fail — follow-ups are optional
+                // Silently fail
             } finally {
                 setLoading(false);
             }
@@ -65,11 +65,7 @@ function FollowUpSuggestions({ result, conversationHistory, onFollowUp }) {
             </div>
             <div className="followup-chips">
                 {suggestions.map((s, i) => (
-                    <button
-                        key={i}
-                        className="followup-chip"
-                        onClick={() => onFollowUp(s)}
-                    >
+                    <button key={i} className="followup-chip" onClick={() => onFollowUp(s)}>
                         <ArrowRight size={13} className="followup-chip-icon" />
                         {s}
                     </button>
@@ -85,8 +81,13 @@ function InsightsCard({ result }) {
     const [loading, setLoading] = useState(false);
     const { getToken } = useAuth();
 
+    // Flatten all rows from all charts for insights
+    const firstChart = result?.charts?.[0];
+    const allRows = firstChart?.data?.slice(0, 30).map(d => Object.values(d)) || [];
+    const cols = firstChart?.columns || [];
+
     useEffect(() => {
-        if (!result?.success || !result?.rows?.length) return;
+        if (!result?.success || !allRows.length) return;
 
         const fetchInsights = async () => {
             setLoading(true);
@@ -94,14 +95,14 @@ function InsightsCard({ result }) {
                 const token = await getToken();
                 const res = await fetch(`${API_URL}/api/insights`, {
                     method: 'POST',
-                    headers: { 
+                    headers: {
                         'Content-Type': 'application/json',
                         'Authorization': `Bearer ${token}`
                     },
                     body: JSON.stringify({
                         query: result.query,
-                        columns: result.columns || [],
-                        rows: result.rows?.slice(0, 30) || [],
+                        columns: cols,
+                        rows: allRows,
                         explanation: result.explanation || '',
                     }),
                 });
@@ -110,7 +111,7 @@ function InsightsCard({ result }) {
                     setInsights(data.insights);
                 }
             } catch {
-                // Silently fail — insights are optional
+                // Silently fail
             } finally {
                 setLoading(false);
             }
@@ -145,25 +146,92 @@ function InsightsCard({ result }) {
     );
 }
 
+/* ─── Collapsible Data Table for one chart ─── */
+function ChartDataTable({ chart }) {
+    const [show, setShow] = useState(false);
+    if (!chart.columns?.length || !chart.data?.length) return null;
+
+    const handleDownloadCSV = () => {
+        const headers = chart.columns.join(',');
+        const rows = chart.data.map(row => 
+            chart.columns.map(col => {
+                let cell = row[col];
+                // Escape quotes and commas
+                if (typeof cell === 'string') {
+                    cell = `"${cell.replace(/"/g, '""')}"`;
+                }
+                return cell ?? '';
+            }).join(',')
+        );
+        const csvContent = [headers, ...rows].join('\n');
+        
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.setAttribute('href', url);
+        link.setAttribute('download', `${chart.title || 'export'}_data.csv`.replace(/\s+/g, '_').toLowerCase());
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    };
+
+    return (
+        <div className="table-section">
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <button className="toggle-btn" onClick={() => setShow(!show)} style={{ flex: 1 }}>
+                    <Table size={16} />
+                    <span>Data Table ({chart.data.length} rows)</span>
+                    {show ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                </button>
+                {show && (
+                    <button 
+                        className="toggle-btn" 
+                        onClick={handleDownloadCSV}
+                        style={{ background: 'rgba(16, 185, 129, 0.1)', color: '#10b981', borderColor: 'rgba(16, 185, 129, 0.2)' }}
+                        title="Download as CSV"
+                    >
+                        <span>Download CSV</span>
+                    </button>
+                )}
+            </div>
+            {show && (
+                <div className="data-table-wrapper">
+                    <table className="data-table">
+                        <thead>
+                            <tr>{chart.columns.map((col, i) => (
+                                <th key={i}>{col.replace(/_/g, ' ')}</th>
+                            ))}</tr>
+                        </thead>
+                        <tbody>
+                            {chart.data.slice(0, 100).map((row, ri) => (
+                                <tr key={ri}>
+                                    {chart.columns.map((col, ci) => (
+                                        <td key={ci}>
+                                            {typeof row[col] === 'number'
+                                                ? row[col].toLocaleString()
+                                                : row[col] ?? '—'}
+                                        </td>
+                                    ))}
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                    {chart.data.length > 100 && (
+                        <p className="table-note">Showing first 100 of {chart.data.length} rows</p>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+}
+
 /* ─── Dashboard Component ─── */
 export default function Dashboard({ result, conversationHistory, onFollowUp }) {
     const [showSQL, setShowSQL] = useState(false);
-    const [showTable, setShowTable] = useState(false);
 
     if (!result) return null;
 
-    const { success, sql, explanation, columns, rows, row_count, charts, error, suggestions } = result;
-
-    // Convert rows to objects for Recharts
-    const chartData = rows?.map(row => {
-        const obj = {};
-        columns?.forEach((col, i) => {
-            const val = row[i];
-            const num = Number(val);
-            obj[col] = isNaN(num) || val === null || val === '' ? val : num;
-        });
-        return obj;
-    }) || [];
+    const { success, sql, explanation, charts, error, suggestions } = result;
 
     if (!success) {
         return (
@@ -172,7 +240,6 @@ export default function Dashboard({ result, conversationHistory, onFollowUp }) {
                     <AlertCircle size={24} />
                     <p>{error || 'Something went wrong. Please try again.'}</p>
                 </div>
-                {/* Smart error recovery: show dataset suggestions */}
                 {suggestions && suggestions.length > 0 && (
                     <div className="error-suggestions">
                         <div className="error-suggestions-header">
@@ -181,11 +248,7 @@ export default function Dashboard({ result, conversationHistory, onFollowUp }) {
                         </div>
                         <div className="error-suggestion-chips">
                             {suggestions.map((s, i) => (
-                                <button
-                                    key={i}
-                                    className="error-suggestion-chip"
-                                    onClick={() => onFollowUp(s)}
-                                >
+                                <button key={i} className="error-suggestion-chip" onClick={() => onFollowUp(s)}>
                                     <ArrowRight size={13} />
                                     {s}
                                 </button>
@@ -207,71 +270,32 @@ export default function Dashboard({ result, conversationHistory, onFollowUp }) {
                 </div>
             )}
 
-            {/* SQL Toggle */}
+            {/* SQL Toggle (combined) */}
             {sql && (
                 <div className="sql-section">
                     <button className="toggle-btn" onClick={() => setShowSQL(!showSQL)}>
                         <Code size={16} />
-                        <span>Generated SQL</span>
+                        <span>Generated SQL ({charts?.length || 1} quer{charts?.length === 1 ? 'y' : 'ies'})</span>
                         {showSQL ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                     </button>
-                    {showSQL && (
-                        <pre className="sql-code">{sql}</pre>
-                    )}
+                    {showSQL && <pre className="sql-code">{sql}</pre>}
                 </div>
             )}
 
-            {/* Charts */}
+            {/* Multi-chart grid */}
             {charts && charts.length > 0 && (
                 <div className="charts-grid">
                     {charts.map((chart, i) => (
-                        <ChartRenderer key={i} chart={chart} data={chartData} />
+                        <div key={i} className="chart-with-table">
+                            <ChartRenderer chart={chart} />
+                            <ChartDataTable chart={chart} />
+                        </div>
                     ))}
                 </div>
             )}
 
-            {/* AI Insights */}
+            {/* AI Insights (from first chart data) */}
             <InsightsCard result={result} />
-
-            {/* Data Table Toggle */}
-            {columns && columns.length > 0 && (
-                <div className="table-section">
-                    <button className="toggle-btn" onClick={() => setShowTable(!showTable)}>
-                        <Table size={16} />
-                        <span>Data Table ({row_count} rows)</span>
-                        {showTable ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                    </button>
-                    {showTable && (
-                        <div className="data-table-wrapper">
-                            <table className="data-table">
-                                <thead>
-                                    <tr>
-                                        {columns.map((col, i) => (
-                                            <th key={i}>{col.replace(/_/g, ' ')}</th>
-                                        ))}
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {rows.slice(0, 100).map((row, ri) => (
-                                        <tr key={ri}>
-                                            {row.map((cell, ci) => (
-                                                <td key={ci}>
-                                                    {typeof cell === 'number'
-                                                        ? cell.toLocaleString()
-                                                        : cell ?? '—'}
-                                                </td>
-                                            ))}
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                            {rows.length > 100 && (
-                                <p className="table-note">Showing first 100 of {row_count} rows</p>
-                            )}
-                        </div>
-                    )}
-                </div>
-            )}
 
             {/* Follow-up Suggestions */}
             <FollowUpSuggestions

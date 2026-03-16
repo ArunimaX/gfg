@@ -39,13 +39,24 @@ def select_chart_type(sql: str, columns: list[str], rows: list[list], user_query
 
     # --- Chart Selection Rules ---
 
+    # Rule 0: Single Row + Numeric Values -> KPI Card
+    if num_rows == 1 and numeric_cols:
+        charts.append({
+            "type": "kpi",
+            "title": _generate_title(columns, "Summary"),
+            "xKey": None,
+            "yKeys": numeric_cols,
+            "description": "High-level metrics summary",
+        })
+
     # Rule 1: Time series data → Line Chart
-    if date_cols and numeric_cols:
+    if date_cols and numeric_cols and num_rows > 1:
         charts.append({
             "type": "line",
             "title": _generate_title(columns, "Trend"),
             "xKey": date_cols[0],
             "yKeys": numeric_cols[:3],
+            "pivotCol": categorical_cols[0] if categorical_cols else None,
             "description": "Time series trend visualization",
         })
 
@@ -56,6 +67,7 @@ def select_chart_type(sql: str, columns: list[str], rows: list[list], user_query
             "title": _generate_title(columns, "Comparison"),
             "xKey": categorical_cols[0],
             "yKeys": numeric_cols[:3],
+            "pivotCol": categorical_cols[1] if len(categorical_cols) > 1 else None,
             "description": "Category comparison",
         })
 
@@ -77,6 +89,7 @@ def select_chart_type(sql: str, columns: list[str], rows: list[list], user_query
             "title": _generate_title(columns, "Area Trend"),
             "xKey": date_cols[0],
             "yKeys": numeric_cols[:2],
+            "pivotCol": categorical_cols[0] if categorical_cols else None,
             "description": "Area trend visualization",
         })
 
@@ -90,6 +103,7 @@ def select_chart_type(sql: str, columns: list[str], rows: list[list], user_query
                 "title": _generate_title(columns, "Ranking"),
                 "xKey": x_key,
                 "yKeys": y_keys,
+                "pivotCol": categorical_cols[1] if categorical_cols and len(categorical_cols) > 1 else None,
                 "description": "Ranking comparison",
             })
 
@@ -104,6 +118,7 @@ def select_chart_type(sql: str, columns: list[str], rows: list[list], user_query
             "title": _generate_title(columns, "Results"),
             "xKey": x_key,
             "yKeys": y_keys,
+            "pivotCol": None,
             "description": "Query results visualization",
         })
 

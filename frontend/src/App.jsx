@@ -170,8 +170,7 @@ function App() {
                             success: true,
                             sql: msg.sql_query,
                             explanation: msg.content,
-                            data: [], // Historical data rows missing in this simple schema
-                            chart_config: null
+                            charts: [], 
                         });
                     }
                 }
