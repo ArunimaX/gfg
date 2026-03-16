@@ -554,3 +554,183 @@ body {
     grid-template-columns: repeat(2, 1fr);
   }
 }
+
+/* ===== Follow-up Suggestions ===== */
+.followup-section {
+  margin-top: 20px;
+  padding: 16px 18px;
+  border-radius: var(--radius);
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.06) 0%, rgba(99, 102, 241, 0.04) 100%);
+  border: 1px solid rgba(139, 92, 246, 0.18);
+  animation: slideUp 0.4s ease-out;
+}
+.followup-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+.followup-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #a78bfa;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  margin-bottom: 12px;
+}
+.followup-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.followup-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 14px;
+  border: 1px solid rgba(139, 92, 246, 0.25);
+  border-radius: 20px;
+  background: rgba(139, 92, 246, 0.07);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 0.83rem;
+  font-family: inherit;
+  transition: all 0.22s ease;
+  text-align: left;
+}
+.followup-chip:hover {
+  border-color: rgba(139, 92, 246, 0.55);
+  color: var(--text-primary);
+  background: rgba(139, 92, 246, 0.14);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(139, 92, 246, 0.15);
+}
+.followup-chip-icon {
+  color: #a78bfa;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+.followup-chip:hover .followup-chip-icon {
+  opacity: 1;
+}
+
+/* ===== AI Insights Card ===== */
+.insights-card {
+  margin: 16px 0;
+  padding: 16px 20px;
+  border-radius: var(--radius);
+  background: linear-gradient(135deg, rgba(251, 191, 36, 0.06) 0%, rgba(245, 158, 11, 0.04) 100%);
+  border: 1px solid rgba(251, 191, 36, 0.18);
+  animation: slideUp 0.4s ease-out;
+}
+.insights-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+.insights-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #fbbf24;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  margin-bottom: 10px;
+}
+.insights-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.insight-item {
+  position: relative;
+  padding-left: 16px;
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+.insight-item::before {
+  content: '▸';
+  position: absolute;
+  left: 0;
+  color: #fbbf24;
+  font-size: 0.75rem;
+}
+
+/* ===== Smart Error Recovery ===== */
+.dashboard-error-container {
+  animation: slideUp 0.4s ease-out;
+}
+.error-suggestions {
+  margin-top: 12px;
+  padding: 14px 16px;
+  border-radius: var(--radius-sm);
+  background: rgba(99, 102, 241, 0.05);
+  border: 1px solid rgba(99, 102, 241, 0.12);
+}
+.error-suggestions-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent-light);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  margin-bottom: 10px;
+}
+.error-suggestion-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.error-suggestion-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  border-radius: 20px;
+  background: rgba(99, 102, 241, 0.06);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-family: inherit;
+  transition: all 0.22s ease;
+  text-align: left;
+}
+.error-suggestion-chip:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+  background: rgba(99, 102, 241, 0.12);
+  transform: translateY(-1px);
+}
+.error-suggestion-chip svg {
+  color: var(--accent-light);
+  flex-shrink: 0;
+}
+
+/* ===== Dataset Badge ===== */
+.dataset-badge {
+  background: rgba(52, 211, 153, 0.1) !important;
+  border-color: rgba(52, 211, 153, 0.25) !important;
+  color: var(--success) !important;
+  font-size: 0.8rem;
+  gap: 5px;
+}
+.dataset-badge:hover {
+  border-color: rgba(248, 113, 113, 0.35) !important;
+  color: var(--error) !important;
+  background: rgba(248, 113, 113, 0.1) !important;
+}
