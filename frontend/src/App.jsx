@@ -166,31 +166,24 @@ function App() {
 
             {/* Main content */}
             <main className="main-content">
-                {/* Welcome state */}
-                {results.length === 0 && !isLoading && (
-                    <div className="welcome-section">
-                        <div className="welcome-icon">
-                            <MessageSquare size={48} />
-                        </div>
-                        <h2>What would you like to know?</h2>
-                        <p>
-                            {activeTable === 'amazon_sales'
-                                ? 'Ask any business question about Amazon sales data and get instant interactive charts and insights.'
-                                : `Your "${activeTable}" dataset is loaded. Ask any question about your data.`
-                            }
-                        </p>
-                    </div>
-                )}
-
-                {/* Query Input */}
-                <QueryInput
-                    onSubmit={handleQuery}
-                    isLoading={isLoading}
-                    conversationHistory={conversationHistory}
-                />
-
-                {/* Results */}
                 <div className="results-container">
+                    {/* Welcome state */}
+                    {results.length === 0 && !isLoading && (
+                        <div className="welcome-section">
+                            <div className="welcome-icon">
+                                <MessageSquare size={48} />
+                            </div>
+                            <h2>What would you like to know?</h2>
+                            <p>
+                                {activeTable === 'amazon_sales'
+                                    ? 'Ask any business question about Amazon sales data and get instant interactive charts and insights.'
+                                    : `Your "${activeTable}" dataset is loaded. Ask any question about your data.`
+                                }
+                            </p>
+                        </div>
+                    )}
+
+                    {/* Results */}
                     {results.map((result, i) => (
                         <div key={i} className="result-block">
                             <div className="user-query">
@@ -204,9 +197,18 @@ function App() {
                             />
                         </div>
                     ))}
+
+                    <div ref={bottomRef} />
                 </div>
 
-                <div ref={bottomRef} />
+                {/* Query Input */}
+                <div className="sticky-input-container">
+                    <QueryInput
+                        onSubmit={handleQuery}
+                        isLoading={isLoading}
+                        conversationHistory={conversationHistory}
+                    />
+                </div>
             </main>
         </div>
     );
