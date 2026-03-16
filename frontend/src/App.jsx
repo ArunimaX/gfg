@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { BarChart3, Upload, X, MessageSquare, Trash2 } from 'lucide-react';
+import { BarChart3, Upload, X, MessageSquare, Trash2, Database } from 'lucide-react';
 import QueryInput from './components/QueryInput';
 import Dashboard from './components/Dashboard';
 import './App.css';
@@ -11,6 +11,7 @@ function App() {
     const [conversationHistory, setConversationHistory] = useState([]);
     const [isLoading, setIsLoading] = useState(false);
     const [uploadStatus, setUploadStatus] = useState(null);
+    const [activeTable, setActiveTable] = useState('amazon_sales');
     const fileInputRef = useRef(null);
     const bottomRef = useRef(null);
 
@@ -23,6 +24,7 @@ function App() {
                 body: JSON.stringify({
                     query,
                     conversation_history: conversationHistory,
+                    table_name: activeTable,
                 }),
             });
             const data = await response.json();
@@ -57,7 +59,7 @@ function App() {
         const file = e.target.files?.[0];
         if (!file) return;
 
-        setUploadStatus({ loading: true, message: 'Uploading...' });
+        setUploadStatus({ loading: true, message: 'Uploading and analyzing schema...' });
         const formData = new FormData();
         formData.append('file', file);
 
@@ -68,10 +70,13 @@ function App() {
             });
             const data = await response.json();
             if (data.success) {
+                setActiveTable(data.table_name);
+                // Clear conversation history for new dataset
+                setConversationHistory([]);
                 setUploadStatus({
                     loading: false,
                     success: true,
-                    message: `✅ ${data.message}. You can now query table "${data.table_name}".`,
+                    message: `✅ ${data.message}. Schema auto-detected — you can now query this data.`,
                 });
             } else {
                 setUploadStatus({ loading: false, success: false, message: `❌ ${data.error}` });
@@ -87,6 +92,13 @@ function App() {
     const clearHistory = () => {
         setResults([]);
         setConversationHistory([]);
+    };
+
+    const switchToDefault = () => {
+        setActiveTable('amazon_sales');
+        setResults([]);
+        setConversationHistory([]);
+        setUploadStatus(null);
     };
 
     return (
@@ -109,6 +121,14 @@ function App() {
                         </div>
                     </div>
                     <div className="header-actions">
+                        {/* Active dataset badge */}
+                        {activeTable !== 'amazon_sales' && (
+                            <button className="action-btn dataset-badge" onClick={switchToDefault}>
+                                <Database size={14} />
+                                <span>{activeTable}</span>
+                                <X size={13} />
+                            </button>
+                        )}
                         <input
                             ref={fileInputRef}
                             type="file"
@@ -154,8 +174,10 @@ function App() {
                         </div>
                         <h2>What would you like to know?</h2>
                         <p>
-                            Ask any business question about Amazon sales data and get instant
-                            interactive charts and insights.
+                            {activeTable === 'amazon_sales'
+                                ? 'Ask any business question about Amazon sales data and get instant interactive charts and insights.'
+                                : `Your "${activeTable}" dataset is loaded. Ask any question about your data.`
+                            }
                         </p>
                     </div>
                 )}
@@ -175,7 +197,11 @@ function App() {
                                 <MessageSquare size={16} />
                                 <span>{result.query}</span>
                             </div>
-                            <Dashboard result={result} />
+                            <Dashboard
+                                result={result}
+                                conversationHistory={conversationHistory}
+                                onFollowUp={handleQuery}
+                            />
                         </div>
                     ))}
                 </div>

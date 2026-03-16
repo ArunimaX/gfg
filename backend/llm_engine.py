@@ -58,6 +58,33 @@ Respond ONLY with valid JSON. No markdown, no code blocks, just raw JSON.
 """
 
 
+def build_dynamic_system_prompt(schema_prompt: str) -> str:
+    """Build a complete system prompt from a dynamic schema description."""
+    return f"""You are an expert SQL analyst. You convert natural language business questions into SQLite SQL queries.
+
+You have access to the following table:
+
+{schema_prompt}
+
+RULES:
+1. ONLY use columns that exist in the schema above. NEVER invent columns.
+2. For date operations, use SQLite date functions like strftime().
+3. For monthly aggregation, use strftime('%Y-%m', date_column) as month.
+4. For quarterly aggregation, use CASE with strftime('%m', date_column).
+5. For "revenue" or "sales", use SUM on the relevant numeric column.
+6. For "top" or "highest", use ORDER BY ... DESC LIMIT.
+7. Return ONLY a JSON object with these keys:
+    - "sql": the SQL query string
+    - "explanation": a brief explanation of what the query does
+    - "can_answer": true/false (false if the question cannot be answered from this dataset)
+8. If the question cannot be answered from the available data, set "can_answer" to false and explain why.
+9. Always alias aggregated columns with readable names.
+10. Use ROUND() for floating point results.
+
+Respond ONLY with valid JSON. No markdown, no code blocks, just raw JSON.
+"""
+
+
 def init_gemini():
     """Initialize the Gemini API client."""
     api_key = os.environ.get("GEMINI_API_KEY", "")
@@ -69,7 +96,7 @@ def init_gemini():
     genai.configure(api_key=api_key)
 
 
-def generate_sql_with_groq(user_query: str, conversation_history: list[dict] = None, table_name: str = "amazon_sales", custom_schema: str = None) -> dict:
+def generate_sql_with_groq(user_query: str, conversation_history: list[dict] = None, table_name: str = "amazon_sales", custom_schema: str = None, custom_system_prompt: str = None) -> dict:
     """
     Fallback: Use Groq API to generate SQL when Gemini fails.
     
@@ -89,8 +116,8 @@ def generate_sql_with_groq(user_query: str, conversation_history: list[dict] = N
     client = Groq(api_key=groq_api_key)
     
     # Build the prompt
-    system = SYSTEM_PROMPT
-    if custom_schema:
+    system = custom_system_prompt if custom_system_prompt else SYSTEM_PROMPT
+    if custom_schema and not custom_system_prompt:
         system += f"\n\nADDITIONAL TABLE:\n{custom_schema}\nUse table name: {table_name}"
     
     # Add conversation history
@@ -162,7 +189,7 @@ def generate_sql_with_groq(user_query: str, conversation_history: list[dict] = N
         }
 
 
-def generate_sql(user_query: str, conversation_history: list[dict] = None, table_name: str = "amazon_sales", custom_schema: str = None) -> dict:
+def generate_sql(user_query: str, conversation_history: list[dict] = None, table_name: str = "amazon_sales", custom_schema: str = None, custom_system_prompt: str = None) -> dict:
     """
     Convert a natural language query to SQL using Gemini with Groq fallback.
     
@@ -202,9 +229,9 @@ def generate_sql(user_query: str, conversation_history: list[dict] = None, table
         # Build the prompt
         messages = []
 
-        # System context
-        system = SYSTEM_PROMPT
-        if custom_schema:
+        # System context: use dynamic prompt if provided
+        system = custom_system_prompt if custom_system_prompt else SYSTEM_PROMPT
+        if custom_schema and not custom_system_prompt:
             system += f"\n\nADDITIONAL TABLE:\n{custom_schema}\nUse table name: {table_name}"
 
         # Add conversation history for follow-up questions
@@ -249,7 +276,7 @@ def generate_sql(user_query: str, conversation_history: list[dict] = None, table
         print("🔄 Attempting fallback to Groq API...")
         
         try:
-            result = generate_sql_with_groq(user_query, conversation_history, table_name, custom_schema)
+            result = generate_sql_with_groq(user_query, conversation_history, table_name, custom_schema, custom_system_prompt)
             print("✅ Successfully generated SQL using Groq fallback")
             return result
         except Exception as groq_error:
