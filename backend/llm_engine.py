@@ -3,6 +3,11 @@
 import os
 import re
 import json
+from dotenv import load_dotenv
+
+# Ensure .env is loaded (in case this module is imported before main.py's load_dotenv)
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
+
 import google.generativeai as genai
 from groq import Groq
 
@@ -108,7 +113,7 @@ def generate_sql_with_groq(user_query: str, conversation_history: list[dict] = N
     try:
         # Use Groq's llama model
         response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-120b",
             messages=[
                 {"role": "system", "content": system + history_context},
                 {"role": "user", "content": user_query}

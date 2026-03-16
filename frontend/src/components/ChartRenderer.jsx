@@ -8,16 +8,16 @@ import {
 } from 'recharts';
 
 const COLORS = [
-    '#6366f1', '#8b5cf6', '#a78bfa', '#c084fc',
-    '#e879f9', '#f472b6', '#fb7185', '#f87171',
-    '#fbbf24', '#34d399', '#2dd4bf', '#22d3ee',
+    '#3B7A3B', '#5DA25D', '#2D5A2D', '#7DBF7D',
+    '#4A6B4A', '#8FBC8F', '#6B8F6B', '#C4A84B',
+    '#2B4F2B', '#A0C49D', '#3D6B3D', '#D4C9B5',
 ];
 
 const CHART_COLORS = {
-    primary: '#6366f1',
-    secondary: '#8b5cf6',
-    tertiary: '#a78bfa',
-    quaternary: '#c084fc',
+    primary: '#3B7A3B',
+    secondary: '#5DA25D',
+    tertiary: '#7DBF7D',
+    quaternary: '#8FBC8F',
 };
 
 function formatValue(value) {
@@ -60,11 +60,11 @@ export default function ChartRenderer({ chart, data }) {
                                     </linearGradient>
                                 ))}
                             </defs>
-                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
-                            <XAxis dataKey={xKey} tick={{ fill: '#94a3b8', fontSize: 12 }} axisLine={{ stroke: '#334155' }} />
-                            <YAxis tick={{ fill: '#94a3b8', fontSize: 12 }} axisLine={{ stroke: '#334155' }} tickFormatter={formatValue} />
+                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(107,143,107,0.15)" />
+                            <XAxis dataKey={xKey} tick={{ fill: '#9BAA9B', fontSize: 12 }} axisLine={{ stroke: '#4A6B4A' }} />
+                            <YAxis tick={{ fill: '#9BAA9B', fontSize: 12 }} axisLine={{ stroke: '#4A6B4A' }} tickFormatter={formatValue} />
                             <Tooltip content={<CustomTooltip />} />
-                            <Legend wrapperStyle={{ color: '#cbd5e1' }} />
+                            <Legend wrapperStyle={{ color: '#D4C9B5' }} />
                             {(yKeys || []).map((key, i) => (
                                 <Line
                                     key={key}
@@ -92,11 +92,11 @@ export default function ChartRenderer({ chart, data }) {
                                     </linearGradient>
                                 ))}
                             </defs>
-                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
-                            <XAxis dataKey={xKey} tick={{ fill: '#94a3b8', fontSize: 12 }} axisLine={{ stroke: '#334155' }} />
-                            <YAxis tick={{ fill: '#94a3b8', fontSize: 12 }} axisLine={{ stroke: '#334155' }} tickFormatter={formatValue} />
+                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(107,143,107,0.15)" />
+                            <XAxis dataKey={xKey} tick={{ fill: '#9BAA9B', fontSize: 12 }} axisLine={{ stroke: '#4A6B4A' }} />
+                            <YAxis tick={{ fill: '#9BAA9B', fontSize: 12 }} axisLine={{ stroke: '#4A6B4A' }} tickFormatter={formatValue} />
                             <Tooltip content={<CustomTooltip />} />
-                            <Legend wrapperStyle={{ color: '#cbd5e1' }} />
+                            <Legend wrapperStyle={{ color: '#D4C9B5' }} />
                             {(yKeys || []).map((key, i) => (
                                 <Bar
                                     key={key}
@@ -124,14 +124,14 @@ export default function ChartRenderer({ chart, data }) {
                                 innerRadius={60}
                                 paddingAngle={3}
                                 label={({ name, percent }) => `${name} (${(percent * 100).toFixed(1)}%)`}
-                                labelLine={{ stroke: '#64748b' }}
+                                labelLine={{ stroke: '#6B8F6B' }}
                             >
                                 {data.map((_, i) => (
                                     <Cell key={i} fill={COLORS[i % COLORS.length]} />
                                 ))}
                             </Pie>
                             <Tooltip content={<CustomTooltip />} />
-                            <Legend wrapperStyle={{ color: '#cbd5e1' }} />
+                            <Legend wrapperStyle={{ color: '#D4C9B5' }} />
                         </PieChart>
                     </ResponsiveContainer>
                 );
@@ -148,11 +148,11 @@ export default function ChartRenderer({ chart, data }) {
                                     </linearGradient>
                                 ))}
                             </defs>
-                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
-                            <XAxis dataKey={xKey} tick={{ fill: '#94a3b8', fontSize: 12 }} axisLine={{ stroke: '#334155' }} />
-                            <YAxis tick={{ fill: '#94a3b8', fontSize: 12 }} axisLine={{ stroke: '#334155' }} tickFormatter={formatValue} />
+                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(107,143,107,0.15)" />
+                            <XAxis dataKey={xKey} tick={{ fill: '#9BAA9B', fontSize: 12 }} axisLine={{ stroke: '#4A6B4A' }} />
+                            <YAxis tick={{ fill: '#9BAA9B', fontSize: 12 }} axisLine={{ stroke: '#4A6B4A' }} tickFormatter={formatValue} />
                             <Tooltip content={<CustomTooltip />} />
-                            <Legend wrapperStyle={{ color: '#cbd5e1' }} />
+                            <Legend wrapperStyle={{ color: '#D4C9B5' }} />
                             {(yKeys || []).map((key, i) => (
                                 <Area
                                     key={key}
