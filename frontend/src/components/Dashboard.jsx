@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Database, Code, Table, ChevronDown, ChevronUp, AlertCircle, Sparkles, Loader2, ArrowRight, Lightbulb, RefreshCw } from 'lucide-react';
+import { useAuth } from '@clerk/clerk-react';
 import ChartRenderer from './ChartRenderer';
 
 const API_URL = 'http://localhost:8000';
@@ -8,6 +9,7 @@ const API_URL = 'http://localhost:8000';
 function FollowUpSuggestions({ result, conversationHistory, onFollowUp }) {
     const [suggestions, setSuggestions] = useState([]);
     const [loading, setLoading] = useState(false);
+    const { getToken } = useAuth();
 
     useEffect(() => {
         if (!result?.success || !result?.query) return;
@@ -15,9 +17,13 @@ function FollowUpSuggestions({ result, conversationHistory, onFollowUp }) {
         const fetchSuggestions = async () => {
             setLoading(true);
             try {
+                const token = await getToken();
                 const res = await fetch(`${API_URL}/api/follow-ups`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
                     body: JSON.stringify({
                         query: result.query,
                         sql: result.sql || '',
@@ -38,7 +44,7 @@ function FollowUpSuggestions({ result, conversationHistory, onFollowUp }) {
         };
 
         fetchSuggestions();
-    }, [result?.query]);
+    }, [result?.query, getToken, conversationHistory]);
 
     if (loading) {
         return (
@@ -77,6 +83,7 @@ function FollowUpSuggestions({ result, conversationHistory, onFollowUp }) {
 function InsightsCard({ result }) {
     const [insights, setInsights] = useState([]);
     const [loading, setLoading] = useState(false);
+    const { getToken } = useAuth();
 
     useEffect(() => {
         if (!result?.success || !result?.rows?.length) return;
@@ -84,9 +91,13 @@ function InsightsCard({ result }) {
         const fetchInsights = async () => {
             setLoading(true);
             try {
+                const token = await getToken();
                 const res = await fetch(`${API_URL}/api/insights`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
                     body: JSON.stringify({
                         query: result.query,
                         columns: result.columns || [],
@@ -106,7 +117,7 @@ function InsightsCard({ result }) {
         };
 
         fetchInsights();
-    }, [result?.query]);
+    }, [result?.query, getToken]);
 
     if (loading) {
         return (

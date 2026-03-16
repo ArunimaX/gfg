@@ -20,52 +20,149 @@ def get_connection() -> sqlite3.Connection:
     return _connection
 
 
-def init_db(csv_path: str = None):
-    """
-    Load CSV data into SQLite. Strips binary preamble if present.
-    Creates the amazon_sales table with proper types.
-    """
-    if csv_path is None:
-        csv_path = os.path.join(get_data_dir(), "Amazon Sales.csv")
+import uuid
+import datetime
 
+def init_db():
     conn = get_connection()
     cursor = conn.cursor()
 
-    # Drop existing table
-    cursor.execute("DROP TABLE IF EXISTS amazon_sales")
+    # Original amazon_sales table
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS amazon_sales (
+        order_id INTEGER PRIMARY KEY,
+        order_date TEXT,
+        product_id INTEGER,
+        product_category TEXT,
+        price REAL,
+        discount_percent REAL,
+        quantity_sold INTEGER,
+        customer_region TEXT,
+        payment_method TEXT,
+        rating REAL,
+        review_count INTEGER,
+        discounted_price REAL,
+        total_revenue REAL
+    )
+    ''')
 
-    # Create table with proper schema
-    cursor.execute("""
-        CREATE TABLE amazon_sales (
-            order_id INTEGER,
-            order_date TEXT,
-            product_id INTEGER,
-            product_category TEXT,
-            price REAL,
-            discount_percent REAL,
-            quantity_sold INTEGER,
-            customer_region TEXT,
-            payment_method TEXT,
-            rating REAL,
-            review_count INTEGER,
-            discounted_price REAL,
-            total_revenue REAL
-        )
-    """)
+    # Chat Sessions table
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS chat_sessions (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        active_table TEXT NOT NULL
+    )
+    ''')
 
+    # Chat Messages table
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS chat_messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        sql_query TEXT,
+        result_summary TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+    )
+    ''')
+
+    conn.commit()
+
+    # Check if we need to load the initial dataset
+    cursor.execute("SELECT COUNT(*) FROM amazon_sales")
+    if cursor.fetchone()[0] == 0:
+        csv_path = os.path.join(get_data_dir(), "amazon_sales_report.csv")
+        if os.path.exists(csv_path):
+            try:
+                _load_initial_csv(conn, cursor, csv_path)
+            except Exception as e:
+                print(f"Failed to load initial CSV: {e}")
+        else:
+            print(f"Warning: Initial CSV not found at {csv_path}")
+
+def create_chat_session(user_id: str, title: str, active_table: str) -> str:
+    conn = get_connection()
+    cursor = conn.cursor()
+    session_id = str(uuid.uuid4())
+    now = datetime.datetime.utcnow().isoformat()
+    cursor.execute(
+        "INSERT INTO chat_sessions (id, user_id, title, created_at, active_table) VALUES (?, ?, ?, ?, ?)",
+        (session_id, user_id, title, now, active_table)
+    )
+    conn.commit()
+    return session_id
+
+def add_chat_message(session_id: str, role: str, content: str, sql_query: str | None = None, result_summary: str | None = None):
+    conn = get_connection()
+    cursor = conn.cursor()
+    message_id = str(uuid.uuid4())
+    now = datetime.datetime.utcnow().isoformat()
+    cursor.execute(
+        "INSERT INTO chat_messages (id, session_id, role, content, sql_query, result_summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (message_id, session_id, role, content, sql_query, result_summary, now)
+    )
+    conn.commit()
+
+def get_user_sessions(user_id: str) -> list[dict]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, title, created_at, active_table FROM chat_sessions WHERE user_id = ? ORDER BY created_at DESC",
+        (user_id,)
+    )
+    return [dict(row) for row in cursor.fetchall()]
+
+def get_session_messages(session_id: str, user_id: str) -> list[dict]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    # Verify owner
+    cursor.execute("SELECT user_id FROM chat_sessions WHERE id = ?", (session_id,))
+    row = cursor.fetchone()
+    if not row or row["user_id"] != user_id:
+        raise ValueError("Session not found or forbidden")
+
+    cursor.execute(
+        "SELECT role, content, sql_query, result_summary, created_at FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC",
+        (session_id,)
+    )
+    return [dict(r) for r in cursor.fetchall()]
+
+def _load_initial_csv(conn: sqlite3.Connection, cursor: sqlite3.Cursor, csv_path: str):
+    """Helper to load the initial Amazon Sale Report CSV into the amazon_sales table."""
+    print(f"Loading initial data from {csv_path}...")
+    
     # Clean and read CSV
     clean_text = clean_csv_content(csv_path)
     reader = csv.reader(io.StringIO(clean_text))
     header = next(reader)  # Skip header
 
-    # Insert data
-    insert_sql = """
-        INSERT INTO amazon_sales 
-        (order_id, order_date, product_id, product_category, price,
-         discount_percent, quantity_sold, customer_region, payment_method,
-         rating, review_count, discounted_price, total_revenue)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """
+    # Map CSV headers to table columns (case-insensitive, handle spaces/underscores)
+    # CSV headers: order_id,Date,Status,Fulfilment,Sales Channel ,ship-service-level,Style,SKU,Category,Size,ASIN,Courier Status,Qty,Currency,Amount,ship-city,ship-state,ship-postal-code,ship-country,promotion-ids,B2B,Fulfilled by
+    # Table columns: order_id,date,status,fulfilment,sales_channel,ship_service_level,style,sku,category,size,asin,courier_status,qty,currency,amount,ship_city,ship_state,ship_postal_code,ship_country,promotion_ids,b2b,fulfilled_by
+    
+    # Create a mapping from cleaned CSV header to its index
+    csv_header_map = {h.strip().lower().replace(' ', '_').replace('-', '_'): i for i, h in enumerate(header)}
+
+    # Define the order of columns for insertion
+    insert_cols = [
+        "order_id", "date", "status", "fulfilment", "sales_channel",
+        "ship_service_level", "style", "sku", "category", "size",
+        "asin", "courier_status", "qty", "currency", "amount",
+        "ship_city", "ship_state", "ship_postal_code", "ship_country",
+        "promotion_ids", "b2b", "fulfilled_by"
+    ]
+    
+    # Ensure all required columns are present in the CSV
+    if not all(col in csv_header_map for col in insert_cols):
+        missing_cols = [col for col in insert_cols if col not in csv_header_map]
+        raise ValueError(f"CSV is missing required columns for amazon_sales table: {missing_cols}")
+
+    insert_sql = f"INSERT INTO amazon_sales ({', '.join(insert_cols)}) VALUES ({', '.join(['?'] * len(insert_cols))})"
 
     rows_inserted = 0
     batch = []

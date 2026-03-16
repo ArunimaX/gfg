@@ -9,78 +9,76 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 import traceback
 import json as json_mod
 import re
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import List, Dict, Any, Optional
 
 from .database import (
-    init_db, execute_query, get_table_info, load_uploaded_csv,
-    get_dynamic_table_info, get_dataset_capabilities, get_all_tables,
+    init_db,
+    get_all_tables,
+    load_uploaded_csv,
+    get_dynamic_table_info,
+    get_dataset_capabilities,
+    create_chat_session,
+    add_chat_message,
+    get_user_sessions,
+    get_session_messages,
+    execute_query,
 )
-from .llm_engine import generate_sql, build_dynamic_system_prompt
+from .llm_engine import generate_sql, generate_sql_with_groq, build_dynamic_system_prompt
 from .chart_selector import select_chart_type
+from .auth import verify_token
 
-app = FastAPI(
-    title="AI BI Dashboard API",
-    description="Convert natural language queries to interactive dashboards",
-    version="1.0.0",
-)
+app = FastAPI()
 
-# CORS for frontend
+# Configure CORS for frontend access
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # Allows all origins
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
 )
 
-# --- Schema cache for uploaded tables ---
-_schema_cache: dict[str, str] = {}
+# Initialize the database on startup
+@app.on_event("startup")
+def startup_event():
+    init_db()
+    # Triggered reload to load .env 
 
+_schema_cache = {}
 
+# Request Models
 class QueryRequest(BaseModel):
     query: str
-    conversation_history: list[dict] = []
+    conversation_history: List[Dict[str, str]] = []
     table_name: str = "amazon_sales"
-
+    session_id: Optional[str] = None
 
 class QueryResponse(BaseModel):
     success: bool
-    sql: str = ""
-    explanation: str = ""
-    columns: list[str] = []
-    rows: list[list] = []
-    row_count: int = 0
-    charts: list[dict] = []
-    error: str = ""
-    suggestions: list[str] = []
-
+    sql: Optional[str] = None
+    explanation: Optional[str] = None
+    columns: Optional[List[str]] = None
+    rows: Optional[List[list]] = None
+    row_count: Optional[int] = None
+    charts: Optional[List[Dict[str, Any]]] = None
+    error: Optional[str] = None
+    suggestions: List[str] = []
+    session_id: Optional[str] = None
 
 class FollowUpRequest(BaseModel):
     query: str
-    sql: str = ""
-    explanation: str = ""
-    columns: list[str] = []
-    conversation_history: list[dict] = []
-
+    columns: List[str]
+    explanation: Optional[str] = None
+    conversation_history: List[Dict[str, str]] = []
 
 class InsightsRequest(BaseModel):
     query: str
-    columns: list[str] = []
-    rows: list[list] = []
-    explanation: str = ""
-
-
-@app.on_event("startup")
-async def startup():
-    """Load CSV data into SQLite on startup."""
-    try:
-        init_db()
-        print("✅ Database initialized successfully")
-    except Exception as e:
-        print(f"❌ Error initializing database: {e}")
-        traceback.print_exc()
+    columns: List[str]
+    rows: List[list]
+    explanation: Optional[str] = None
 
 
 @app.get("/api/health")
@@ -90,17 +88,17 @@ async def health():
 
 
 @app.get("/api/schema")
-async def schema():
+async def schema(user_id: str = Depends(verify_token)):
     """Get the current database schema."""
     try:
-        info = get_table_info()
+        info = get_dynamic_table_info("amazon_sales")
         return {"success": True, "schema": info}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 
 @app.get("/api/tables")
-async def list_tables():
+async def list_tables(user_id: str = Depends(verify_token)):
     """List all available tables in the database."""
     try:
         tables = get_all_tables()
@@ -120,8 +118,28 @@ async def list_tables():
         return {"success": False, "error": str(e)}
 
 
+@app.get("/api/sessions")
+async def get_sessions(user_id: str = Depends(verify_token)):
+    """List all past chat sessions for the authenticated user."""
+    try:
+        sessions = get_user_sessions(user_id)
+        return {"success": True, "sessions": sessions}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/sessions/{session_id}")
+async def get_session_history(session_id: str, user_id: str = Depends(verify_token)):
+    """Get messages for a specific session."""
+    try:
+        messages = get_session_messages(session_id, user_id)
+        return {"success": True, "messages": messages}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 @app.post("/api/query", response_model=QueryResponse)
-async def query(request: QueryRequest):
+async def query(request: QueryRequest, user_id: str = Depends(verify_token)):
     """
     Process a natural language query:
     1. Send to Gemini LLM to generate SQL
@@ -130,6 +148,12 @@ async def query(request: QueryRequest):
     4. Return structured results with smart error recovery
     """
     try:
+        session_id = request.session_id
+        if not session_id:
+            title = request.query[:50] + "..." if len(request.query) > 50 else request.query
+            session_id = create_chat_session(user_id, title, request.table_name)
+            request.session_id = session_id
+
         # Determine if we need a custom system prompt for non-default tables
         custom_system_prompt = None
         if request.table_name != "amazon_sales":
@@ -210,6 +234,19 @@ async def query(request: QueryRequest):
             user_query=request.query,
         )
 
+        add_chat_message(
+            session_id=session_id,
+            role="user",
+            content=request.query
+        )
+        add_chat_message(
+            session_id=session_id,
+            role="assistant",
+            content=llm_result.get("explanation", "Here is your data."),
+            sql_query=sql,
+            result_summary=f"Found {result['row_count']} rows."
+        )
+
         return QueryResponse(
             success=True,
             sql=sql,
@@ -218,6 +255,7 @@ async def query(request: QueryRequest):
             rows=result["rows"],
             row_count=result["row_count"],
             charts=charts,
+            session_id=session_id,
         )
 
     except Exception as e:
@@ -229,7 +267,7 @@ async def query(request: QueryRequest):
 
 
 @app.post("/api/upload-csv")
-async def upload_csv(file: UploadFile = File(...)):
+async def upload_csv(file: UploadFile = File(...), user_id: str = Depends(verify_token)):
     """Upload a CSV file and make it queryable with auto-detected schema."""
     try:
         content = await file.read()
@@ -259,7 +297,7 @@ async def upload_csv(file: UploadFile = File(...)):
 
 
 @app.get("/api/example-prompts")
-async def example_prompts():
+async def example_prompts(user_id: str = Depends(verify_token)):
     """Return example prompts for the user."""
     return {
         "prompts": [
@@ -276,7 +314,7 @@ async def example_prompts():
 
 
 @app.post("/api/follow-ups")
-async def generate_follow_ups(request: FollowUpRequest):
+async def generate_follow_ups(request: FollowUpRequest, user_id: str = Depends(verify_token)):
     """Generate smart follow-up question suggestions based on the current query result."""
     try:
         import google.generativeai as genai
@@ -331,7 +369,7 @@ Return ONLY a JSON array of 3 strings, no markdown, no extra text. Example:
 
 
 @app.post("/api/insights")
-async def generate_insights(request: InsightsRequest):
+async def generate_insights(request: InsightsRequest, user_id: str = Depends(verify_token)):
     """Generate AI-powered text insights from query results."""
     try:
         import google.generativeai as genai
